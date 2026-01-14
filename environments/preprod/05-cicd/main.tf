@@ -1,0 +1,118 @@
+###############################################################################
+# CI/CD Module - Standalone Deployment (CodeDeploy, CodePipeline)
+# State: s3://ajyal-preprod-terraform-state-946846709937-{ACCOUNT}/preprod/cicd/terraform.tfstate
+# Depends on: 03-storage
+#
+# FAST DEPLOYMENT: CodeDeploy pulls artifacts from S3 in same region
+###############################################################################
+
+terraform {
+  required_version = ">= 1.5.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+
+  backend "s3" {
+    bucket         = "ajyal-preprod-terraform-state-946846709937"
+    key            = "preprod/cicd/terraform.tfstate"
+    region         = "eu-west-1"
+    encrypt        = true
+    dynamodb_table = "preprod-ajyal-terraform-locks"
+  }
+}
+
+provider "aws" {
+  region = var.aws_region
+
+  default_tags {
+    tags = {
+      Environment = var.environment
+      Project     = "Ajyal-LMS"
+      ManagedBy   = "Terraform"
+      Module      = "cicd"
+    }
+  }
+}
+
+#------------------------------------------------------------------------------
+# Remote State - Dependencies
+#------------------------------------------------------------------------------
+
+data "terraform_remote_state" "storage" {
+  backend = "s3"
+  config = {
+    bucket = "ajyal-preprod-terraform-state-946846709937"
+    key    = "preprod/storage/terraform.tfstate"
+    region = "eu-west-1"
+  }
+}
+
+#------------------------------------------------------------------------------
+# CI/CD Module
+#------------------------------------------------------------------------------
+
+module "cicd" {
+  source = "../../../modules/cicd"
+
+  environment = var.environment
+
+  # CodeDeploy
+  enable_codedeploy           = var.enable_codedeploy
+  codedeploy_windows_app_name = "${var.environment}-windows-app"
+  codedeploy_linux_app_name   = "${var.environment}-linux-app"
+
+  # FAST DEPLOYMENT CONFIG
+  deployment_config_name = var.deployment_config_name # AllAtOnce = fastest
+  enable_auto_rollback   = var.enable_auto_rollback
+
+  # CodePipeline
+  enable_codepipeline = var.enable_codepipeline
+  source_repository   = var.source_repository
+  source_branch       = var.source_branch
+
+  # S3 Artifact Bucket (same region for fast access)
+  artifact_bucket_name = data.terraform_remote_state.storage.outputs.artifact_bucket_name
+
+  # Zero-Downtime Deployment - ALB Target Groups
+  # (Set these after deploying compute module for zero-downtime deployments)
+  app_target_group_name      = var.app_target_group_name
+  api_target_group_name      = var.api_target_group_name
+  botpress_target_group_name = var.botpress_target_group_name
+
+  # ASG Integration for CodeDeploy
+  app_asg_name      = var.app_asg_name
+  api_asg_name      = var.api_asg_name
+  botpress_asg_name = var.botpress_asg_name
+}
+
+#------------------------------------------------------------------------------
+# Outputs
+#------------------------------------------------------------------------------
+
+output "instance_profile_name" {
+  value = module.cicd.instance_profile_name
+}
+
+output "instance_profile_arn" {
+  value = module.cicd.instance_profile_arn
+}
+
+output "ec2_role_arn" {
+  value = module.cicd.ec2_role_arn
+}
+
+output "codedeploy_windows_app_name" {
+  value = module.cicd.codedeploy_windows_app_name
+}
+
+output "codedeploy_linux_app_name" {
+  value = module.cicd.codedeploy_linux_app_name
+}
+
+output "codedeploy_role_arn" {
+  value = module.cicd.codedeploy_role_arn
+}
